@@ -13,6 +13,8 @@ import { Login } from './pages/Login';
 import { Signup } from './pages/Signup';
 import { ExploreCourses } from './pages/ExploreCourses';
 import { CourseDetail } from './pages/CourseDetail';
+import { OAuthSuccess } from './pages/OAuthSuccess';
+import { OAuthError } from './pages/OAuthError';
 
 // Tutor Pages
 import { TutorDashboard } from './pages/tutor/TutorDashboard';
@@ -32,6 +34,8 @@ export default function App() {
     <Routes>
       <Route path="/login" element={<Login />} />
       <Route path="/signup" element={<Signup />} />
+      <Route path="/oauth-success" element={<OAuthSuccess />} />
+      <Route path="/oauth-error" element={<OAuthError />} />
       
       {/* Learner Routes */}
       <Route element={<ProtectedRoute allowedRoles={['Learner']} />}>

@@ -19,9 +19,44 @@ interface AuthContextType {
   login: (token: string, user: User, rememberMe?: boolean) => void;
   logout: () => void;
   refreshUser: () => Promise<void>;
+  updateUser: (partial: Partial<User>) => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
+
+const normalizeRole = (role: string): 'Learner' | 'Tutor' => {
+  return String(role || '').toUpperCase() === 'TUTOR' ? 'Tutor' : 'Learner';
+};
+
+const getApiOrigin = () => {
+  const baseUrl = (import.meta as any).env?.VITE_API_BASE_URL || 'http://localhost:8080/api';
+  try {
+    return new URL(baseUrl).origin;
+  } catch {
+    return 'http://localhost:8080';
+  }
+};
+
+const resolveAvatarUrl = (avatarUrl?: string) => {
+  if (!avatarUrl) return undefined;
+  if (avatarUrl.startsWith('http://') || avatarUrl.startsWith('https://')) {
+    return avatarUrl;
+  }
+  const normalizedPath = avatarUrl.startsWith('/') ? avatarUrl : `/${avatarUrl}`;
+  return `${getApiOrigin()}${normalizedPath}`;
+};
+
+const mapProfileToUser = (profile: any): User => ({
+  id: profile.id,
+  name: profile.fullName || `${profile.firstName || ''} ${profile.lastName || ''}`.trim() || profile.username || 'User',
+  email: profile.email,
+  role: normalizeRole(profile.role),
+  profile_image: resolveAvatarUrl(profile.avatarUrl),
+  mastery_percent: 0,
+  accuracy: 0,
+  avg_solve_time: '0s',
+  streak: 0,
+});
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
@@ -30,7 +65,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const refreshUser = async () => {
     try {
       const res = await api.get('/user/me');
-      setUser(res.data);
+      const profile = res?.data?.data || res?.data;
+      setUser(mapProfileToUser(profile));
     } catch (err) {
       setUser(null);
       localStorage.removeItem('token');
@@ -66,8 +102,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setUser(null);
   };
 
+  const updateUser = (partial: Partial<User>) => {
+    setUser((prev) => {
+      if (!prev) return prev;
+      return { ...prev, ...partial };
+    });
+  };
+
   return (
-    <AuthContext.Provider value={{ user, loading, login, logout, refreshUser }}>
+    <AuthContext.Provider value={{ user, loading, login, logout, refreshUser, updateUser }}>
       {children}
     </AuthContext.Provider>
   );

@@ -23,11 +23,21 @@ import {
 import api from '../services/api';
 import { motion, AnimatePresence } from 'motion/react';
 
+const getApiErrorMessage = (err: any, fallback: string) => {
+  return (
+    err?.response?.data?.message
+    || err?.response?.data?.error
+    || err?.message
+    || fallback
+  );
+};
+
 const cn = (...classes: any[]) => classes.filter(Boolean).join(' ');
 
 export const Profile = () => {
-  const { user, refreshUser, logout } = useAuth();
+  const { user, refreshUser, logout, updateUser } = useAuth();
   const navigate = useNavigate();
+  const [avatarVersion, setAvatarVersion] = useState(() => Date.now());
   const [isEditing, setIsEditing] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [formData, setFormData] = useState({
@@ -51,6 +61,63 @@ export const Profile = () => {
   const [rotation, setRotation] = useState(0);
   const [croppedAreaPixels, setCroppedAreaPixels] = useState<Area | null>(null);
   const [showCropModal, setShowCropModal] = useState(false);
+  const [emailOtp, setEmailOtp] = useState('');
+  const [emailOtpSent, setEmailOtpSent] = useState(false);
+  const [emailOtpVerified, setEmailOtpVerified] = useState(false);
+  const [sendingEmailOtp, setSendingEmailOtp] = useState(false);
+  const [verifyingEmailOtp, setVerifyingEmailOtp] = useState(false);
+
+  React.useEffect(() => {
+    setFormData({
+      name: user?.name || '',
+      email: user?.email || '',
+    });
+  }, [user?.name, user?.email]);
+
+  const normalizeEmail = (value?: string) => String(value || '').trim().toLowerCase();
+  const isEmailChanged = normalizeEmail(formData.email) !== normalizeEmail(user?.email);
+
+  const getApiOrigin = () => {
+    const baseUrl = (import.meta as any).env?.VITE_API_BASE_URL || 'http://localhost:8080/api';
+    try {
+      return new URL(baseUrl).origin;
+    } catch {
+      return 'http://localhost:8080';
+    }
+  };
+
+  const handleSessionExpired = () => {
+    setStatus({ type: 'error', message: 'Session expired. Please log in again.' });
+    setTimeout(() => {
+      logout();
+      navigate('/login');
+    }, 900);
+  };
+
+  const getAuthHeaders = () => {
+    const token = localStorage.getItem('token') || sessionStorage.getItem('token');
+    if (!token) {
+      handleSessionExpired();
+      return null;
+    }
+    return { Authorization: `Bearer ${token}` };
+  };
+
+  const getResolvedAvatarUrl = (avatarUrl?: string) => {
+    if (!avatarUrl) return '';
+    if (avatarUrl.startsWith('http://') || avatarUrl.startsWith('https://')) {
+      return avatarUrl;
+    }
+    const normalizedPath = avatarUrl.startsWith('/') ? avatarUrl : `/${avatarUrl}`;
+    return `${getApiOrigin()}${normalizedPath}`;
+  };
+
+  const getAvatarDisplaySrc = (avatarUrl?: string) => {
+    const resolvedUrl = getResolvedAvatarUrl(avatarUrl);
+    if (!resolvedUrl) return '';
+    const separator = resolvedUrl.includes('?') ? '&' : '?';
+    return `${resolvedUrl}${separator}v=${avatarVersion}`;
+  };
 
   const onCropComplete = useCallback((_: Area, b: Area) => {
     setCroppedAreaPixels(b);
@@ -100,19 +167,21 @@ export const Profile = () => {
       const formData = new FormData();
       formData.append('image', file);
 
-      await api.post('/user/upload-profile-image', formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data',
-        },
-      });
+      const res = await api.post('/user/profile/upload', formData);
+      const uploadedProfile = res?.data?.data || res?.data;
+      const uploadedAvatarUrl = uploadedProfile?.avatarUrl;
+      if (uploadedAvatarUrl) {
+        updateUser({ profile_image: getResolvedAvatarUrl(uploadedAvatarUrl) });
+      }
 
       setStatus({ type: 'success', message: 'Profile picture updated!' });
       await refreshUser();
+      setAvatarVersion(Date.now());
       setShowCropModal(false);
       setImageToCrop(null);
       setTimeout(() => setStatus(null), 3000);
     } catch (err: any) {
-      setStatus({ type: 'error', message: err.response?.data?.error || 'Failed to upload image' });
+      setStatus({ type: 'error', message: getApiErrorMessage(err, 'Failed to upload image') });
     } finally {
       setUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
@@ -121,20 +190,112 @@ export const Profile = () => {
 
   const handleProfileUpdate = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    if (isEmailChanged && !emailOtpVerified) {
+      setStatus({ type: 'error', message: 'Please verify OTP for the new email before saving.' });
+      return;
+    }
+
     setLoading(true);
     setStatus(null);
     try {
-      await api.put('/user/me', formData);
+      await api.put('/user/me', { fullName: formData.name });
       setStatus({ type: 'success', message: 'Profile updated successfully!' });
       setIsEditing(false);
+      setEmailOtp('');
+      setEmailOtpSent(false);
+      setEmailOtpVerified(false);
       await refreshUser();
       
       // Clear success message after 3 seconds
       setTimeout(() => setStatus(null), 3000);
     } catch (err: any) {
-      setStatus({ type: 'error', message: err.response?.data?.error || 'Failed to update profile' });
+      setStatus({ type: 'error', message: getApiErrorMessage(err, 'Failed to update profile') });
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleSendEmailOtp = async () => {
+    if (!isEmailChanged) {
+      setStatus({ type: 'error', message: 'Enter a new email address first.' });
+      return;
+    }
+
+    setSendingEmailOtp(true);
+    setStatus(null);
+    try {
+      const targetEmail = formData.email.trim();
+      const authHeaders = getAuthHeaders();
+      if (!authHeaders) {
+        return;
+      }
+      let res;
+      try {
+        res = await api.post('/user/email/send-otp', { newEmail: targetEmail }, { headers: authHeaders });
+      } catch (innerErr: any) {
+        if (innerErr?.response?.status === 404) {
+          res = await api.post('/auth/send-otp', { email: targetEmail }, { headers: authHeaders });
+        } else {
+          throw innerErr;
+        }
+      }
+      setEmailOtpSent(true);
+      setEmailOtpVerified(false);
+      setEmailOtp('');
+      setStatus({ type: 'success', message: res?.data?.message || 'OTP sent to new email.' });
+    } catch (err: any) {
+      if (err?.response?.status === 401) {
+        handleSessionExpired();
+        return;
+      }
+      setStatus({ type: 'error', message: getApiErrorMessage(err, 'Failed to send OTP') });
+    } finally {
+      setSendingEmailOtp(false);
+    }
+  };
+
+  const handleVerifyEmailOtp = async () => {
+    if (!emailOtpSent) {
+      setStatus({ type: 'error', message: 'Please click Send OTP first.' });
+      return;
+    }
+
+    if (!emailOtp.trim()) {
+      setStatus({ type: 'error', message: 'Please enter the OTP sent to your new email.' });
+      return;
+    }
+
+    setVerifyingEmailOtp(true);
+    setStatus(null);
+    try {
+      const authHeaders = getAuthHeaders();
+      if (!authHeaders) {
+        return;
+      }
+      const res = await api.post('/user/email/verify-otp', {
+        newEmail: formData.email.trim(),
+        otp: emailOtp.trim(),
+      }, { headers: authHeaders });
+
+      const updatedProfile = res?.data?.data || res?.data;
+      const nextEmail = updatedProfile?.email || formData.email.trim();
+      updateUser({ email: nextEmail });
+      setEmailOtpVerified(true);
+      setStatus({ type: 'success', message: 'Email updated successfully. Please log in again.' });
+      setTimeout(() => {
+        logout();
+        navigate('/login');
+      }, 1200);
+    } catch (err: any) {
+      if (err?.response?.status === 401) {
+        handleSessionExpired();
+        return;
+      }
+      setStatus({ type: 'error', message: getApiErrorMessage(err, 'Failed to verify OTP') });
+      setEmailOtpVerified(false);
+    } finally {
+      setVerifyingEmailOtp(false);
     }
   };
 
@@ -171,7 +332,7 @@ export const Profile = () => {
       setPasswordData({ current: '', new: '', confirm: '' });
       setTimeout(() => setStatus(null), 3000);
     } catch (err: any) {
-      setStatus({ type: 'error', message: err.response?.data?.error || 'Failed to change password' });
+      setStatus({ type: 'error', message: getApiErrorMessage(err, 'Failed to change password') });
     } finally {
       setLoading(false);
     }
@@ -184,7 +345,7 @@ export const Profile = () => {
       logout();
       navigate('/login');
     } catch (err: any) {
-      setStatus({ type: 'error', message: err.response?.data?.error || 'Failed to delete account' });
+      setStatus({ type: 'error', message: getApiErrorMessage(err, 'Failed to delete account') });
       setShowDeleteModal(false);
     } finally {
       setLoading(false);
@@ -232,7 +393,7 @@ export const Profile = () => {
               )}>
                 {user?.profile_image ? (
                   <img 
-                    src={user.profile_image} 
+                    src={getAvatarDisplaySrc(user.profile_image)} 
                     alt={user.name} 
                     className="w-full h-full object-cover block border-none outline-none"
                     onError={(e) => {
@@ -281,7 +442,12 @@ export const Profile = () => {
               </h3>
               {!isEditing && (
                 <button 
-                  onClick={() => setIsEditing(true)}
+                  onClick={() => {
+                    setIsEditing(true);
+                    setEmailOtp('');
+                    setEmailOtpSent(false);
+                    setEmailOtpVerified(false);
+                  }}
                   className="text-xs font-bold text-sage-600 hover:text-sage-700 uppercase tracking-widest"
                 >
                   Edit Profile
@@ -308,11 +474,54 @@ export const Profile = () => {
                     type="email" 
                     disabled={!isEditing}
                     value={formData.email}
-                    onChange={(e) => setFormData({...formData, email: e.target.value})}
+                    onChange={(e) => {
+                      setFormData({...formData, email: e.target.value});
+                      setEmailOtp('');
+                      setEmailOtpSent(false);
+                      setEmailOtpVerified(false);
+                    }}
                     className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-sage-500 outline-none transition-all disabled:opacity-50 text-slate-900 dark:text-white dark:placeholder:text-slate-600 text-sm"
                   />
                 </div>
               </div>
+
+              {isEditing && isEmailChanged && (
+                <div className="space-y-4 p-4 bg-slate-50 dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-700">
+                  <p className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                    Verify your new email with OTP before saving profile changes.
+                  </p>
+
+                  <div className="flex flex-col md:flex-row gap-3">
+                    <button
+                      type="button"
+                      onClick={handleSendEmailOtp}
+                      disabled={sendingEmailOtp}
+                      className="px-5 py-2.5 bg-sage-600 hover:bg-sage-700 text-white font-bold rounded-xl transition-all disabled:opacity-50 text-sm"
+                    >
+                      {sendingEmailOtp ? 'Sending OTP...' : (emailOtpSent ? 'Resend OTP' : 'Send OTP')}
+                    </button>
+
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      maxLength={6}
+                      value={emailOtp}
+                      onChange={(e) => setEmailOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                      placeholder="Enter 6-digit OTP"
+                      className="flex-1 px-4 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-sage-500 outline-none text-sm"
+                    />
+
+                    <button
+                      type="button"
+                      onClick={handleVerifyEmailOtp}
+                      disabled={verifyingEmailOtp}
+                      className="px-5 py-2.5 bg-slate-800 dark:bg-slate-700 hover:bg-slate-900 dark:hover:bg-slate-600 text-white font-bold rounded-xl transition-all disabled:opacity-50 text-sm"
+                    >
+                      {verifyingEmailOtp ? 'Verifying...' : (emailOtpVerified ? 'Verified' : 'Verify OTP')}
+                    </button>
+                  </div>
+                </div>
+              )}
 
               {isEditing && (
                 <div className="flex gap-3 pt-4">
@@ -325,7 +534,16 @@ export const Profile = () => {
                   </button>
                   <button 
                     type="button"
-                    onClick={() => setIsEditing(false)}
+                    onClick={() => {
+                      setIsEditing(false);
+                      setFormData({
+                        name: user?.name || '',
+                        email: user?.email || '',
+                      });
+                      setEmailOtp('');
+                      setEmailOtpSent(false);
+                      setEmailOtpVerified(false);
+                    }}
                     className="px-8 py-3 bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-900 dark:text-white font-bold rounded-xl transition-all"
                   >
                     Cancel

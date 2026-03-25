@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Logo } from '../components/Logo';
 import { Mail, Lock, User as UserIcon, ArrowRight, Check, X, Chrome, Sun, Moon } from 'lucide-react';
@@ -6,6 +6,54 @@ import api from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
 import { motion } from 'motion/react';
+import { signInWithPopup } from 'firebase/auth';
+import { firebaseAuth, googleProvider } from '../services/firebase';
+
+const normalizeRole = (role: string): 'Learner' | 'Tutor' => {
+  return String(role || '').toUpperCase() === 'TUTOR' ? 'Tutor' : 'Learner';
+};
+
+const getApiOrigin = () => {
+  const baseUrl = (import.meta as any).env?.VITE_API_BASE_URL || 'http://localhost:8080/api';
+  try {
+    return new URL(baseUrl).origin;
+  } catch {
+    return 'http://localhost:8080';
+  }
+};
+
+const resolveAvatarUrl = (avatarUrl?: string) => {
+  if (!avatarUrl) return undefined;
+  if (avatarUrl.startsWith('http://') || avatarUrl.startsWith('https://')) {
+    return avatarUrl;
+  }
+  const normalizedPath = avatarUrl.startsWith('/') ? avatarUrl : `/${avatarUrl}`;
+  return `${getApiOrigin()}${normalizedPath}`;
+};
+
+const mapAuthUser = (payload: any) => {
+  const user = payload?.user || {};
+  return {
+    id: user.id || payload?.userId,
+    name: payload?.name || `${user.firstName || ''} ${user.lastName || ''}`.trim() || user.username || 'User',
+    email: user.email,
+    role: normalizeRole(payload?.role || user.role),
+    profile_image: resolveAvatarUrl(user.avatarUrl),
+    mastery_percent: 0,
+    accuracy: 0,
+    avg_solve_time: '0s',
+    streak: 0,
+  };
+};
+
+const getErrorMessage = (err: any, fallback: string) => {
+  return (
+    err?.response?.data?.message
+    || err?.response?.data?.error
+    || err?.message
+    || fallback
+  );
+};
 
 export const Signup = () => {
   const [formData, setFormData] = useState({
@@ -22,28 +70,22 @@ export const Signup = () => {
   const { isDark, toggleTheme } = useTheme();
   const navigate = useNavigate();
 
-  useEffect(() => {
-    const handleMessage = (event: MessageEvent) => {
-      const origin = event.origin;
-      if (!origin.endsWith('.run.app') && !origin.includes('localhost')) {
-        return;
-      }
-      if (event.data?.type === 'OAUTH_AUTH_SUCCESS') {
-        login(event.data.token, event.data.user, true);
-        navigate('/');
-      }
-    };
-    window.addEventListener('message', handleMessage);
-    return () => window.removeEventListener('message', handleMessage);
-  }, [login, navigate]);
-
   const handleGoogleSignup = async () => {
+    setLoading(true);
+    setError('');
     try {
-      const response = await api.get(`/auth/google/url?role=${formData.role}`);
-      const { url } = response.data;
-      window.open(url, 'google_oauth', 'width=600,height=700');
-    } catch (err) {
-      setError('Failed to initialize Google signup');
+      const credential = await signInWithPopup(firebaseAuth, googleProvider);
+      const idToken = await credential.user.getIdToken();
+      const res = await api.post('/auth/google', {}, {
+        headers: { Authorization: `Bearer ${idToken}` },
+      });
+      const payload = res?.data?.data || res?.data;
+      login(payload.accessToken, mapAuthUser(payload), formData.rememberMe);
+      navigate('/');
+    } catch (err: any) {
+      setError(getErrorMessage(err, 'Google sign-up failed'));
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -71,11 +113,26 @@ export const Signup = () => {
     setLoading(true);
     setError('');
     try {
-      const res = await api.post('/auth/signup', formData);
-      login(res.data.token, res.data.user, formData.rememberMe);
+      const fullName = formData.name.trim();
+      const parts = fullName.split(/\s+/).filter(Boolean);
+      const firstName = parts[0] || 'User';
+      const lastName = parts.slice(1).join(' ') || 'Google';
+      const usernameBase = formData.email.split('@')[0].replace(/[^a-zA-Z0-9_-]/g, '_');
+      const payload = {
+        firstName,
+        lastName,
+        username: usernameBase,
+        email: formData.email,
+        password: formData.password,
+        role: formData.role.toUpperCase(),
+      };
+
+      const res = await api.post('/auth/register', payload);
+      const authPayload = res?.data?.data || res?.data;
+      login(authPayload.accessToken, mapAuthUser(authPayload), formData.rememberMe);
       navigate('/');
     } catch (err: any) {
-      setError(err.response?.data?.error || 'Failed to sign up');
+      setError(getErrorMessage(err, 'Failed to sign up'));
     } finally {
       setLoading(false);
     }

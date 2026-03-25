@@ -13,19 +13,30 @@ import {
   List
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Link, useParams, useNavigate } from 'react-router-dom';
+import { Link, useParams } from 'react-router-dom';
 import api from '../services/api';
-import { useAuth } from '../context/AuthContext';
+
+const getApiErrorMessage = (err: any, fallback: string) => {
+  return (
+    err?.response?.data?.message
+    || err?.response?.data?.error
+    || err?.message
+    || fallback
+  );
+};
 
 export const CourseDetail = () => {
   const { id } = useParams();
-  const { user } = useAuth();
-  const navigate = useNavigate();
   const [course, setCourse] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [enrolling, setEnrolling] = useState(false);
   const [isEnrolled, setIsEnrolled] = useState(false);
   const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
+  const [chatMessages, setChatMessages] = useState<any[]>([]);
+  const [chatInput, setChatInput] = useState('');
+  const [chatLoading, setChatLoading] = useState(false);
+  const [chatPosting, setChatPosting] = useState(false);
+  const [chatError, setChatError] = useState<string | null>(null);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -35,7 +46,7 @@ export const CourseDetail = () => {
           api.get('/user/enrollments')
         ]);
         setCourse(courseRes.data);
-        setIsEnrolled(enrollmentsRes.data.some((e: any) => e.id === Number(id)));
+        setIsEnrolled(enrollmentsRes.data.some((e: any) => e.courseId === Number(id)));
       } catch (err) {
         console.error(err);
       } finally {
@@ -48,7 +59,7 @@ export const CourseDetail = () => {
   const handleEnroll = async () => {
     setEnrolling(true);
     try {
-      await api.post(`/courses/${id}/enroll`);
+      await api.post('/courses/enroll', { courseId: Number(id) });
       setIsEnrolled(true);
     } catch (err) {
       console.error(err);
@@ -57,7 +68,47 @@ export const CourseDetail = () => {
     }
   };
 
+  useEffect(() => {
+    const fetchChat = async () => {
+      if (!isEnrolled || !id) {
+        setChatMessages([]);
+        setChatError(null);
+        return;
+      }
+
+      setChatLoading(true);
+      setChatError(null);
+      try {
+        const res = await api.get(`/courses/${id}/chat`);
+        setChatMessages(res.data);
+      } catch (err) {
+        setChatError(getApiErrorMessage(err, 'Unable to load course chat.'));
+      } finally {
+        setChatLoading(false);
+      }
+    };
+
+    fetchChat();
+  }, [id, isEnrolled]);
+
+  const handleSendChat = async () => {
+    if (!chatInput.trim() || !id) return;
+    setChatPosting(true);
+    setChatError(null);
+    try {
+      const res = await api.post(`/courses/${id}/chat`, { message: chatInput.trim() });
+      setChatMessages((prev) => [...prev, res.data]);
+      setChatInput('');
+    } catch (err) {
+      setChatError(getApiErrorMessage(err, 'Unable to send message.'));
+    } finally {
+      setChatPosting(false);
+    }
+  };
+
   if (loading) return <div className="flex items-center justify-center h-96">Loading...</div>;
+
+  const modules = course?.modules || [];
 
   const scrollToModule = (moduleId: number) => {
     const element = document.getElementById(`module-${moduleId}`);
@@ -118,7 +169,7 @@ export const CourseDetail = () => {
                 </button>
               </div>
               <div className="space-y-3">
-                {course.modules.map((mod: any, i: number) => (
+                {modules.map((mod: any, i: number) => (
                   <button
                     key={mod.id}
                     onClick={() => scrollToModule(mod.id)}
@@ -145,7 +196,7 @@ export const CourseDetail = () => {
           <div className="bg-white dark:bg-slate-800 rounded-3xl border border-slate-200 dark:border-slate-700 shadow-sm p-6">
             <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4 ml-1">Course Progress</h3>
             <div className="space-y-2">
-              {course.modules.map((mod: any, i: number) => (
+              {modules.map((mod: any, i: number) => (
                 <button
                   key={mod.id}
                   onClick={() => scrollToModule(mod.id)}
@@ -175,7 +226,7 @@ export const CourseDetail = () => {
           <div className="space-y-6">
             <div className="flex items-center gap-3">
               <span className="text-xs font-bold px-3 py-1 bg-accent-50 dark:bg-accent-900/20 text-accent-600 dark:text-accent-400 rounded-full uppercase tracking-widest border border-accent-100 dark:border-accent-800">
-                {course.difficulty}
+                {course.difficultyLevel}
               </span>
               <span className="text-xs font-bold px-3 py-1 bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 dark:text-emerald-400 rounded-full uppercase tracking-widest border border-emerald-100 dark:border-emerald-800">
                 Adaptive Learning
@@ -191,7 +242,7 @@ export const CourseDetail = () => {
                 </div>
                 <div>
                   <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Tutor</p>
-                  <p className="text-sm font-bold text-slate-900 dark:text-slate-50">{course.tutor_name}</p>
+                  <p className="text-sm font-bold text-slate-900 dark:text-slate-50">{course.tutorName}</p>
                 </div>
               </div>
               <div className="flex items-center gap-3">
@@ -218,7 +269,7 @@ export const CourseDetail = () => {
           <div className="space-y-6">
             <h2 className="text-2xl font-bold text-slate-900 dark:text-slate-50">Course Content</h2>
             <div className="space-y-4">
-              {course.modules.map((mod: any, i: number) => (
+              {modules.map((mod: any, i: number) => (
                 <div 
                   key={mod.id} 
                   id={`module-${mod.id}`}
@@ -249,13 +300,9 @@ export const CourseDetail = () => {
         <div className="lg:col-span-3 space-y-6">
           <div className="bg-white dark:bg-slate-800 p-8 rounded-3xl border border-slate-200 dark:border-slate-700 shadow-xl sticky top-24">
             <div className="aspect-video bg-slate-100 dark:bg-slate-900 rounded-2xl mb-6 overflow-hidden relative group">
-              {course.thumbnail ? (
-                <img src={course.thumbnail} alt={course.title} className="w-full h-full object-cover" />
-              ) : (
-                <div className="w-full h-full flex items-center justify-center text-slate-400">
-                  <Play size={48} fill="currentColor" />
-                </div>
-              )}
+              <div className="w-full h-full flex items-center justify-center text-slate-400">
+                <Play size={48} fill="currentColor" />
+              </div>
               <div className="absolute inset-0 bg-black/20 group-hover:bg-black/40 transition-colors flex items-center justify-center">
                 <div className="w-16 h-16 rounded-full bg-white/90 dark:bg-slate-800/90 flex items-center justify-center text-accent-600 shadow-xl">
                   <Play size={32} fill="currentColor" />
@@ -296,7 +343,7 @@ export const CourseDetail = () => {
                 <ul className="space-y-3">
                   <li className="flex items-center gap-3 text-sm text-slate-600 dark:text-slate-400">
                     <Play size={16} className="text-accent-600" />
-                    {course.modules.length} Adaptive Modules
+                    {modules.length} Adaptive Modules
                   </li>
                   <li className="flex items-center gap-3 text-sm text-slate-600 dark:text-slate-400">
                     <FileText size={16} className="text-accent-600" />
@@ -308,6 +355,44 @@ export const CourseDetail = () => {
                   </li>
                 </ul>
               </div>
+
+              {isEnrolled && (
+                <div className="space-y-3 pt-6 border-t border-slate-100 dark:border-slate-800">
+                  <h4 className="text-sm font-bold text-slate-900 dark:text-slate-50">Course Chat</h4>
+                    {chatError && (
+                      <p className="text-xs font-medium text-rose-600 dark:text-rose-400">{chatError}</p>
+                    )}
+                  <div className="max-h-48 overflow-y-auto rounded-xl border border-slate-200 dark:border-slate-700 p-3 space-y-2 bg-slate-50 dark:bg-slate-900/40">
+                    {chatLoading ? (
+                      <p className="text-xs text-slate-500">Loading messages...</p>
+                    ) : chatMessages.length === 0 ? (
+                      <p className="text-xs text-slate-500">No messages yet. Start the conversation.</p>
+                    ) : (
+                      chatMessages.map((message: any) => (
+                        <div key={message.id} className="text-xs">
+                          <p className="font-bold text-slate-700 dark:text-slate-200">{message.senderName}</p>
+                          <p className="text-slate-600 dark:text-slate-400">{message.message}</p>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                  <div className="flex gap-2">
+                    <input
+                      value={chatInput}
+                      onChange={(e) => setChatInput(e.target.value)}
+                      placeholder="Message tutor..."
+                      className="flex-1 px-3 py-2 text-sm bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg outline-none focus:ring-2 focus:ring-accent-500"
+                    />
+                    <button
+                      onClick={handleSendChat}
+                      disabled={chatPosting || !chatInput.trim()}
+                      className="px-3 py-2 text-sm font-bold bg-accent-600 hover:bg-accent-700 text-white rounded-lg disabled:opacity-50"
+                    >
+                      Send
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>

@@ -5,6 +5,7 @@ import {
   FileText, 
   Code2, 
   Save, 
+  Pencil,
   ChevronRight,
   ArrowLeft,
   Trash2,
@@ -17,28 +18,76 @@ import api from '../../services/api';
 interface Module {
   id: number;
   title: string;
-  video_url: string;
-  notes: string;
-  order_index: number;
+  videoUrl: string;
+  content: string;
+  orderIndex: number;
 }
+
+interface PracticeQuestionLite {
+  id: number;
+  title: string;
+  topic: string;
+  difficultyLevel: string;
+}
+
+interface CourseExam {
+  id: number;
+  title: string;
+  durationMinutes: number;
+  published: boolean;
+  questionCount: number;
+}
+
+const unwrapData = <T,>(response: any): T => {
+  if (response?.data?.data !== undefined) {
+    return response.data.data as T;
+  }
+  return response?.data as T;
+};
 
 export const ModuleProblemCreation = () => {
   const { id } = useParams();
   const [course, setCourse] = useState<any>(null);
   const [modules, setModules] = useState<Module[]>([]);
+  const [questionPool, setQuestionPool] = useState<PracticeQuestionLite[]>([]);
+  const [courseExams, setCourseExams] = useState<CourseExam[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAddModule, setShowAddModule] = useState(false);
-  const [newModule, setNewModule] = useState({ title: '', video_url: '', notes: '' });
+  const [newModule, setNewModule] = useState({ title: '', videoUrl: '', content: '' });
+  const [editingModuleId, setEditingModuleId] = useState<number | null>(null);
+  const [editModule, setEditModule] = useState({ title: '', videoUrl: '', content: '' });
+  const [creatingExam, setCreatingExam] = useState(false);
+  const [examError, setExamError] = useState('');
+  const [examForm, setExamForm] = useState({
+    title: '',
+    description: '',
+    durationMinutes: 45,
+    published: true,
+    selectedQuestionIds: [] as number[],
+  });
+
+  const normalizeModule = (mod: any): Module => ({
+    id: Number(mod.id),
+    title: mod.title || '',
+    videoUrl: mod.videoUrl || mod.video_url || '',
+    content: mod.content || mod.notes || '',
+    orderIndex: mod.orderIndex || mod.order_index || 1,
+  });
 
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const [courseRes, modulesRes] = await Promise.all([
+        const [courseRes, modulesRes, questionRes, examRes] = await Promise.all([
           api.get(`/courses/${id}`),
-          api.get(`/courses/${id}/modules`)
+          api.get(`/courses/${id}/modules`),
+          api.get('/practice/questions'),
+          api.get(`/courses/${id}/exams`),
         ]);
-        setCourse(courseRes.data);
-        setModules(modulesRes.data);
+        setCourse(unwrapData<any>(courseRes));
+        const rawModules = unwrapData<any[]>(modulesRes) || [];
+        setModules(rawModules.map(normalizeModule));
+        setQuestionPool(unwrapData<PracticeQuestionLite[]>(questionRes) || []);
+        setCourseExams(unwrapData<CourseExam[]>(examRes) || []);
       } catch (err) {
         console.error(err);
       } finally {
@@ -51,14 +100,102 @@ export const ModuleProblemCreation = () => {
   const handleAddModule = async () => {
     try {
       const res = await api.post(`/courses/${id}/modules`, {
-        ...newModule,
-        order_index: modules.length + 1
+        title: newModule.title,
+        videoUrl: newModule.videoUrl,
+        content: newModule.content,
+        orderIndex: modules.length + 1,
       });
-      setModules([...modules, { ...newModule, id: res.data.id, order_index: modules.length + 1 }]);
+      const created = normalizeModule(unwrapData<any>(res));
+      setModules([...modules, created]);
       setShowAddModule(false);
-      setNewModule({ title: '', video_url: '', notes: '' });
+      setNewModule({ title: '', videoUrl: '', content: '' });
     } catch (err) {
       console.error(err);
+    }
+  };
+
+  const startEditModule = (mod: Module) => {
+    setEditingModuleId(mod.id);
+    setEditModule({ title: mod.title, videoUrl: mod.videoUrl || '', content: mod.content || '' });
+  };
+
+  const saveEditModule = async (moduleId: number) => {
+    try {
+      const existing = modules.find((m) => m.id === moduleId);
+      if (!existing) return;
+
+      const res = await api.put(`/courses/${id}/modules/${moduleId}`, {
+        title: editModule.title,
+        videoUrl: editModule.videoUrl,
+        content: editModule.content,
+        orderIndex: existing.orderIndex,
+      });
+
+      const updated = normalizeModule(unwrapData<any>(res));
+      setModules((prev) => prev.map((m) => (m.id === moduleId ? updated : m)));
+      setEditingModuleId(null);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const deleteModule = async (moduleId: number) => {
+    try {
+      await api.delete(`/courses/${id}/modules/${moduleId}`);
+      setModules((prev) => prev.filter((m) => m.id !== moduleId));
+      if (editingModuleId === moduleId) {
+        setEditingModuleId(null);
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const toggleQuestionSelection = (questionId: number) => {
+    setExamForm((prev) => ({
+      ...prev,
+      selectedQuestionIds: prev.selectedQuestionIds.includes(questionId)
+        ? prev.selectedQuestionIds.filter((id) => id !== questionId)
+        : [...prev.selectedQuestionIds, questionId],
+    }));
+  };
+
+  const createCourseExam = async () => {
+    if (!id) return;
+    setExamError('');
+
+    if (!examForm.title.trim()) {
+      setExamError('Exam title is required.');
+      return;
+    }
+    if (examForm.selectedQuestionIds.length < 3) {
+      setExamError('Select at least 3 questions for the exam.');
+      return;
+    }
+
+    setCreatingExam(true);
+    try {
+      const res = await api.post(`/courses/${id}/exams`, {
+        title: examForm.title.trim(),
+        description: examForm.description.trim(),
+        durationMinutes: Number(examForm.durationMinutes),
+        questionIds: examForm.selectedQuestionIds,
+        published: examForm.published,
+      });
+      const createdExam = unwrapData<CourseExam>(res);
+      setCourseExams((prev) => [createdExam, ...prev]);
+      setExamForm({
+        title: '',
+        description: '',
+        durationMinutes: 45,
+        published: true,
+        selectedQuestionIds: [],
+      });
+    } catch (err) {
+      console.error(err);
+      setExamError((err as any)?.response?.data?.message || 'Unable to create exam right now.');
+    } finally {
+      setCreatingExam(false);
     }
   };
 
@@ -102,7 +239,18 @@ export const ModuleProblemCreation = () => {
                     <h3 className="font-bold text-slate-900 dark:text-slate-50">{mod.title}</h3>
                   </div>
                   <div className="flex items-center gap-2">
-                    <button className="p-2 text-slate-400 hover:text-rose-600 transition-colors">
+                    <button
+                      onClick={() => startEditModule(mod)}
+                      className="p-2 text-slate-400 hover:text-accent-600 transition-colors"
+                      title="Edit module"
+                    >
+                      <Pencil size={18} />
+                    </button>
+                    <button
+                      onClick={() => deleteModule(mod.id)}
+                      className="p-2 text-slate-400 hover:text-rose-600 transition-colors"
+                      title="Delete module"
+                    >
                       <Trash2 size={18} />
                     </button>
                   </div>
@@ -111,11 +259,11 @@ export const ModuleProblemCreation = () => {
                   <div className="space-y-4">
                     <div className="flex items-center gap-3 text-sm text-slate-600 dark:text-slate-400">
                       <Video size={18} className="text-accent-600" />
-                      <span className="font-medium truncate">{mod.video_url || 'No video linked'}</span>
+                      <span className="font-medium truncate">{mod.videoUrl || 'No video linked'}</span>
                     </div>
                     <div className="flex items-start gap-3 text-sm text-slate-600 dark:text-slate-400">
                       <FileText size={18} className="text-emerald-600" />
-                      <p className="font-medium line-clamp-2">{mod.notes || 'No notes added'}</p>
+                      <p className="font-medium line-clamp-2">{mod.content || 'No notes added'}</p>
                     </div>
                   </div>
                   <div className="flex flex-col justify-end gap-2">
@@ -127,6 +275,49 @@ export const ModuleProblemCreation = () => {
                     </Link>
                   </div>
                 </div>
+
+                {editingModuleId === mod.id && (
+                  <div className="px-6 pb-6">
+                    <div className="p-4 rounded-xl border border-accent-200 bg-accent-50/60 dark:bg-accent-900/20 dark:border-accent-800 space-y-3">
+                      <input
+                        type="text"
+                        placeholder="Module title"
+                        value={editModule.title}
+                        onChange={(e) => setEditModule((prev) => ({ ...prev, title: e.target.value }))}
+                        className="w-full px-4 py-3 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl outline-none dark:text-slate-100"
+                      />
+                      <input
+                        type="text"
+                        placeholder="Video URL"
+                        value={editModule.videoUrl}
+                        onChange={(e) => setEditModule((prev) => ({ ...prev, videoUrl: e.target.value }))}
+                        className="w-full px-4 py-3 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl outline-none dark:text-slate-100"
+                      />
+                      <textarea
+                        placeholder="Module notes"
+                        value={editModule.content}
+                        onChange={(e) => setEditModule((prev) => ({ ...prev, content: e.target.value }))}
+                        rows={3}
+                        className="w-full px-4 py-3 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl outline-none dark:text-slate-100 resize-none"
+                      />
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => setEditingModuleId(null)}
+                          className="px-4 py-2 rounded-xl bg-slate-200 text-slate-700 font-bold text-xs"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          onClick={() => saveEditModule(mod.id)}
+                          className="px-4 py-2 rounded-xl bg-accent-600 text-white font-bold text-xs inline-flex items-center gap-2"
+                        >
+                          <Save size={14} />
+                          Save Changes
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             ))}
 
@@ -147,14 +338,14 @@ export const ModuleProblemCreation = () => {
                   <input 
                     type="text"
                     placeholder="Video URL (YouTube/Vimeo)"
-                    value={newModule.video_url}
-                    onChange={e => setNewModule({...newModule, video_url: e.target.value})}
+                    value={newModule.videoUrl}
+                    onChange={e => setNewModule({...newModule, videoUrl: e.target.value})}
                     className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl outline-none dark:text-slate-100"
                   />
                   <textarea 
                     placeholder="Module Notes (Markdown supported)"
-                    value={newModule.notes}
-                    onChange={e => setNewModule({...newModule, notes: e.target.value})}
+                    value={newModule.content}
+                    onChange={e => setNewModule({...newModule, content: e.target.value})}
                     rows={3}
                     className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl outline-none dark:text-slate-100 resize-none"
                   />
@@ -207,7 +398,104 @@ export const ModuleProblemCreation = () => {
               </li>
             </ul>
           </div>
+
+          <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm space-y-4">
+            <h3 className="text-base font-bold text-slate-900 dark:text-slate-50">Course Exams</h3>
+            {courseExams.length === 0 ? (
+              <p className="text-xs text-slate-500">No exams created yet for this course.</p>
+            ) : (
+              <div className="space-y-2">
+                {courseExams.map((exam) => (
+                  <div key={exam.id} className="p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/40">
+                    <p className="text-sm font-bold text-slate-900 dark:text-slate-100">{exam.title}</p>
+                    <p className="text-xs text-slate-500">{exam.questionCount} questions • {exam.durationMinutes} mins • {exam.published ? 'Published' : 'Draft'}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
+      </div>
+
+      <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm space-y-5">
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="text-lg font-bold text-slate-900 dark:text-slate-50">Create Course Exam</h2>
+          <span className="text-xs text-slate-500">Select questions from practice bank</span>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <input
+            type="text"
+            placeholder="Exam title"
+            value={examForm.title}
+            onChange={(e) => setExamForm((prev) => ({ ...prev, title: e.target.value }))}
+            className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl outline-none dark:text-slate-100"
+          />
+          <input
+            type="number"
+            min={5}
+            max={300}
+            placeholder="Duration minutes"
+            value={examForm.durationMinutes}
+            onChange={(e) => setExamForm((prev) => ({ ...prev, durationMinutes: Number(e.target.value) }))}
+            className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl outline-none dark:text-slate-100"
+          />
+        </div>
+
+        <textarea
+          placeholder="Exam description (optional)"
+          value={examForm.description}
+          onChange={(e) => setExamForm((prev) => ({ ...prev, description: e.target.value }))}
+          rows={3}
+          className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl outline-none dark:text-slate-100 resize-none"
+        />
+
+        <label className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
+          <input
+            type="checkbox"
+            checked={examForm.published}
+            onChange={(e) => setExamForm((prev) => ({ ...prev, published: e.target.checked }))}
+          />
+          Publish exam immediately
+        </label>
+
+        <div className="max-h-72 overflow-y-auto rounded-xl border border-slate-200 dark:border-slate-700">
+          {questionPool.length === 0 ? (
+            <p className="p-4 text-sm text-slate-500">No practice questions available yet.</p>
+          ) : (
+            <div className="divide-y divide-slate-100 dark:divide-slate-700">
+              {questionPool.map((question) => {
+                const checked = examForm.selectedQuestionIds.includes(question.id);
+                return (
+                  <label key={question.id} className="flex items-start gap-3 p-3 text-sm cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-900/30">
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => toggleQuestionSelection(question.id)}
+                    />
+                    <div>
+                      <p className="font-semibold text-slate-800 dark:text-slate-100">{question.title}</p>
+                      <p className="text-xs text-slate-500">{question.topic} • {question.difficultyLevel}</p>
+                    </div>
+                  </label>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        <div className="flex items-center justify-between gap-4">
+          <p className="text-xs text-slate-500">Selected questions: {examForm.selectedQuestionIds.length}</p>
+          <button
+            onClick={createCourseExam}
+            disabled={creatingExam}
+            className="px-5 py-2.5 rounded-xl bg-accent-600 hover:bg-accent-700 text-white font-bold text-sm disabled:opacity-60"
+          >
+            {creatingExam ? 'Creating...' : 'Create Exam'}
+          </button>
+        </div>
+
+        {examError && <p className="text-sm text-rose-600 dark:text-rose-400">{examError}</p>}
       </div>
     </div>
   );

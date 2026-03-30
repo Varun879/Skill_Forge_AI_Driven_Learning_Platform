@@ -18,11 +18,38 @@ interface Course {
   title: string;
   description: string;
   difficulty: string;
-  tags: string;
+  tags: string[];
   thumbnail: string;
   price: number;
-  tutor_name: string;
+  tutorName: string;
 }
+
+const unwrapData = <T,>(response: any): T => {
+  if (response?.data?.data !== undefined) {
+    return response.data.data as T;
+  }
+  return response?.data as T;
+};
+
+const normalizeCourse = (raw: any): Course => {
+  const rawTags = raw?.tags;
+  const tags = Array.isArray(rawTags)
+    ? rawTags.filter((t: unknown) => typeof t === 'string')
+    : typeof rawTags === 'string'
+      ? rawTags.split(',').map((t: string) => t.trim()).filter(Boolean)
+      : [];
+
+  return {
+    id: Number(raw?.id ?? 0),
+    title: String(raw?.title ?? ''),
+    description: String(raw?.description ?? ''),
+    difficulty: String(raw?.difficultyLevel ?? raw?.difficulty ?? 'UNKNOWN'),
+    tags,
+    thumbnail: String(raw?.thumbnail ?? ''),
+    price: Number(raw?.price ?? 0),
+    tutorName: String(raw?.tutorName ?? raw?.tutor_name ?? 'Tutor'),
+  };
+};
 
 export const ExploreCourses = () => {
   const [courses, setCourses] = useState<Course[]>([]);
@@ -33,7 +60,8 @@ export const ExploreCourses = () => {
     const fetchCourses = async () => {
       try {
         const res = await api.get('/courses');
-        setCourses(res.data);
+        const courseList = unwrapData<any[]>(res);
+        setCourses(Array.isArray(courseList) ? courseList.map(normalizeCourse) : []);
       } catch (err) {
         console.error(err);
       } finally {
@@ -45,7 +73,7 @@ export const ExploreCourses = () => {
 
   const filteredCourses = courses.filter(c => 
     c.title.toLowerCase().includes(search.toLowerCase()) || 
-    c.tags.toLowerCase().includes(search.toLowerCase())
+    c.tags.some(tag => tag.toLowerCase().includes(search.toLowerCase()))
   );
 
   if (loading) return <div className="flex items-center justify-center h-96">Loading...</div>;
@@ -93,7 +121,7 @@ export const ExploreCourses = () => {
             
             <div className="p-6 flex-1 flex flex-col">
               <div className="flex items-center gap-2 mb-3">
-                {course.tags.split(',').slice(0, 2).map((tag, i) => (
+                {course.tags.slice(0, 2).map((tag, i) => (
                   <span key={i} className="text-[10px] font-bold px-2 py-1 bg-accent-50 dark:bg-accent-900/20 text-accent-600 dark:text-accent-400 rounded-md uppercase tracking-widest">
                     {tag.trim()}
                   </span>
@@ -105,9 +133,9 @@ export const ExploreCourses = () => {
               <div className="flex items-center justify-between pt-6 border-t border-slate-100 dark:border-slate-700">
                 <div className="flex items-center gap-2">
                   <div className="w-8 h-8 rounded-full bg-slate-100 dark:bg-slate-900 flex items-center justify-center text-slate-600 dark:text-slate-400 font-bold text-xs">
-                    {course.tutor_name.charAt(0)}
+                    {course.tutorName.charAt(0)}
                   </div>
-                  <span className="text-xs font-bold text-slate-700 dark:text-slate-300">{course.tutor_name}</span>
+                  <span className="text-xs font-bold text-slate-700 dark:text-slate-300">{course.tutorName}</span>
                 </div>
                 <div className="text-right">
                   <p className="text-lg font-bold text-slate-900 dark:text-slate-50">

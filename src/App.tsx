@@ -25,6 +25,7 @@ import { CreateProblem } from './pages/tutor/CreateProblem';
 import { SubmissionsReview } from './pages/tutor/SubmissionsReview';
 import { DoubtManagement } from './pages/tutor/DoubtManagement';
 import { TutorAnalytics } from './pages/tutor/TutorAnalytics';
+import { TutorChat } from './pages/tutor/TutorChat';
 import { useAuth } from './context/AuthContext';
 
 export default function App() {
@@ -60,6 +61,7 @@ export default function App() {
         <Route path="/tutor/problems/create" element={<CreateProblem />} />
         <Route path="/tutor/submissions" element={<SubmissionsReview />} />
         <Route path="/tutor/doubts" element={<DoubtManagement />} />
+        <Route path="/tutor/chats" element={<TutorChat />} />
         <Route path="/tutor/analytics" element={<TutorAnalytics />} />
       </Route>
 

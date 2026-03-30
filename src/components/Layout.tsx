@@ -70,6 +70,7 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
   const tutorNavItems = [
     { icon: LayoutDashboard, label: 'Dashboard', to: '/tutor' },
     { icon: BookOpen, label: 'Courses', to: '/tutor/courses' },
+    { icon: MessageSquare, label: 'Chats', to: '/tutor/chats' },
     { icon: CheckCircle, label: 'Submissions', to: '/tutor/submissions' },
     { icon: MessageSquare, label: 'Doubts', to: '/tutor/doubts' },
     { icon: BarChart3, label: 'Analytics', to: '/tutor/analytics' },

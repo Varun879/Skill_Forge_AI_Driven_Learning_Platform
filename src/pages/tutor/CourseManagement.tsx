@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Link } from 'react-router-dom';
+import axios from 'axios';
 import api from '../../services/api';
 
 interface Course {
@@ -23,17 +24,68 @@ interface Course {
   thumbnail: string;
 }
 
+const unwrapData = <T,>(response: any): T => {
+  if (response?.data?.data !== undefined) {
+    return response.data.data as T;
+  }
+  return response?.data as T;
+};
+
+const normalizeCourse = (course: any): Course => ({
+  id: Number(course.id),
+  title: course.title || '',
+  description: course.description || '',
+  difficulty: course.difficulty || course.difficultyLevel || 'BEGINNER',
+  status: String(course.status || 'DRAFT').toLowerCase(),
+  created_at: course.created_at || course.createdAt || '',
+  thumbnail: course.thumbnail || course.thumbnailUrl || '',
+});
+
 export const CourseManagement = () => {
   const [courses, setCourses] = useState<Course[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const extractErrorMessage = (err: unknown) => {
+    if (axios.isAxiosError(err)) {
+      const apiMessage = (err.response?.data as any)?.message || (err.response?.data as any)?.error;
+      if (apiMessage) {
+        return String(apiMessage);
+      }
+      if (err.response?.status) {
+        return `Failed to load courses (${err.response.status})`;
+      }
+    }
+    if (err instanceof Error && err.message) {
+      return err.message;
+    }
+    return 'Failed to load courses';
+  };
 
   useEffect(() => {
     const fetchCourses = async () => {
       try {
-        const res = await api.get('/tutor/courses');
-        setCourses(res.data);
+        setError(null);
+        let payload: any[] = [];
+
+        try {
+          const res = await api.get('/courses/mine');
+          payload = unwrapData<any[]>(res) || [];
+        } catch (primaryErr) {
+          // Backward compatibility: older backends may expose tutor courses under /tutor/courses.
+          if (axios.isAxiosError(primaryErr) && primaryErr.response?.status === 404) {
+            const fallbackRes = await api.get('/tutor/courses');
+            payload = unwrapData<any[]>(fallbackRes) || [];
+          } else {
+            throw primaryErr;
+          }
+        }
+
+        setCourses(payload.map(normalizeCourse));
       } catch (err) {
         console.error(err);
+        setError(extractErrorMessage(err));
+        setCourses([]);
       } finally {
         setLoading(false);
       }
@@ -52,6 +104,31 @@ export const CourseManagement = () => {
   };
 
   if (loading) return <div className="flex items-center justify-center h-96">Loading...</div>;
+
+  if (error) {
+    return (
+      <div className="space-y-8">
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-3xl font-bold text-slate-900 dark:text-slate-50">Course Management</h1>
+            <p className="text-slate-500 dark:text-slate-400 mt-1">Manage your existing courses and create new ones.</p>
+          </div>
+          <Link
+            to="/tutor/courses/create"
+            className="flex items-center gap-2 px-6 py-3 bg-accent-600 hover:bg-accent-700 text-white font-bold rounded-xl transition-all shadow-lg shadow-accent-200 dark:shadow-none"
+          >
+            <Plus size={20} />
+            Create New Course
+          </Link>
+        </div>
+
+        <div className="bg-rose-50 dark:bg-rose-900/20 border border-rose-200 dark:border-rose-800 rounded-2xl p-6 text-rose-700 dark:text-rose-300">
+          <p className="font-semibold">Unable to load your courses.</p>
+          <p className="mt-1 text-sm">{error}</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-8">

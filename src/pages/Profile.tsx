@@ -18,7 +18,8 @@ import {
   X,
   RotateCcw,
   Plus,
-  Minus
+  Minus,
+  Award
 } from 'lucide-react';
 import api from '../services/api';
 import { motion, AnimatePresence } from 'motion/react';
@@ -66,6 +67,8 @@ export const Profile = () => {
   const [emailOtpVerified, setEmailOtpVerified] = useState(false);
   const [sendingEmailOtp, setSendingEmailOtp] = useState(false);
   const [verifyingEmailOtp, setVerifyingEmailOtp] = useState(false);
+  const [certificates, setCertificates] = useState<any[]>([]);
+  const [certLoading, setCertLoading] = useState(false);
 
   React.useEffect(() => {
     setFormData({
@@ -73,6 +76,23 @@ export const Profile = () => {
       email: user?.email || '',
     });
   }, [user?.name, user?.email]);
+
+  React.useEffect(() => {
+    const fetchCertificates = async () => {
+      setCertLoading(true);
+      try {
+        const res = await api.get('/certificate/my');
+        const payload = res?.data?.data ?? res?.data;
+        setCertificates(Array.isArray(payload) ? payload : []);
+      } catch {
+        setCertificates([]);
+      } finally {
+        setCertLoading(false);
+      }
+    };
+
+    fetchCertificates();
+  }, []);
 
   const normalizeEmail = (value?: string) => String(value || '').trim().toLowerCase();
   const isEmailChanged = normalizeEmail(formData.email) !== normalizeEmail(user?.email);
@@ -551,6 +571,63 @@ export const Profile = () => {
                 </div>
               )}
             </form>
+          </section>
+
+          <section className="bg-white dark:bg-slate-800 p-8 rounded-3xl border border-slate-200 dark:border-slate-700 shadow-sm">
+            <h3 className="text-lg font-bold flex items-center gap-3 mb-6 text-slate-900 dark:text-white">
+              <Award size={20} className="text-sage-600" />
+              My Certificates
+            </h3>
+
+            {certLoading ? (
+              <p className="text-sm text-slate-500 dark:text-slate-400">Loading certificates...</p>
+            ) : certificates.length === 0 ? (
+              <p className="text-sm text-slate-500 dark:text-slate-400">No certificates yet. Complete all modules and pass the course final exam to unlock certificates.</p>
+            ) : (
+              <div className="space-y-3">
+                {certificates.map((certificate) => (
+                  <div
+                    key={certificate.id}
+                    className="p-4 rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/40"
+                  >
+                    <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-bold text-slate-900 dark:text-slate-100">{certificate.courseTitle || `Course #${certificate.courseId}`}</p>
+                        <p className="text-xs text-slate-500">Issued: {certificate.issuedAt ? new Date(certificate.issuedAt).toLocaleDateString() : 'N/A'}</p>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <a
+                          href={certificate.certificateUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex items-center justify-center px-4 py-2 rounded-xl text-xs font-bold bg-sage-600 hover:bg-sage-700 text-white"
+                        >
+                          View Certificate
+                        </a>
+                        <a
+                          href={certificate.certificateDownloadUrl || `${certificate.certificateUrl}?download=true`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex items-center justify-center px-4 py-2 rounded-xl text-xs font-bold bg-slate-200 hover:bg-slate-300 text-slate-900"
+                        >
+                          Download
+                        </a>
+                        {certificate.publicVerifyUrl && (
+                          <a
+                            href={certificate.publicVerifyUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center justify-center px-4 py-2 rounded-xl text-xs font-bold border border-slate-300 text-slate-700 hover:bg-slate-100"
+                          >
+                            Verify
+                          </a>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </section>
 
           <section className="bg-white dark:bg-slate-800 p-8 rounded-3xl border border-slate-200 dark:border-slate-700 shadow-sm">

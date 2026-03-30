@@ -9,30 +9,86 @@ import {
   DollarSign
 } from 'lucide-react';
 import { motion } from 'motion/react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import api from '../../services/api';
 
+const unwrapData = <T,>(response: any): T => {
+  if (response?.data?.data !== undefined) {
+    return response.data.data as T;
+  }
+  return response?.data as T;
+};
+
 export const CreateCourse = () => {
+  const { id } = useParams();
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
   const [formData, setFormData] = useState({
     title: '',
     description: '',
-    difficulty: 'Beginner',
+    difficultyLevel: 'BEGINNER',
     tags: '',
     thumbnail: '',
+    youtubeVideoUrl: '',
     price: 0,
-    status: 'draft'
+    status: 'DRAFT'
   });
+
+  React.useEffect(() => {
+    const fetchCourseForEdit = async () => {
+      if (!id) return;
+      try {
+        const res = await api.get(`/courses/${id}`);
+        const course = unwrapData<any>(res);
+        setFormData((prev) => ({
+          ...prev,
+          title: course?.title || '',
+          description: course?.description || '',
+          difficultyLevel: course?.difficultyLevel || 'BEGINNER',
+          tags: Array.isArray(course?.tags) ? course.tags.join(', ') : '',
+          price: Number(course?.price || 0),
+          youtubeVideoUrl: course?.youtubeVideoUrl || '',
+          status: course?.status || 'DRAFT',
+        }));
+      } catch (err) {
+        console.error(err);
+      }
+    };
+    fetchCourseForEdit();
+  }, [id]);
 
   const handleSubmit = async (e: React.FormEvent, status: string) => {
     e.preventDefault();
     setLoading(true);
+    setError('');
     try {
-      const res = await api.post('/courses', { ...formData, status });
-      navigate(`/tutor/courses/${res.data.id}/modules`);
+      const payload = {
+        title: formData.title.trim(),
+        description: formData.description.trim(),
+        difficultyLevel: formData.difficultyLevel,
+        price: Number(formData.price),
+        tags: formData.tags
+          .split(',')
+          .map((tag) => tag.trim())
+          .filter(Boolean),
+        youtubeVideoUrl: formData.youtubeVideoUrl.trim() || null,
+        status,
+      };
+
+      const res = id
+        ? await api.put(`/courses/${id}`, payload)
+        : await api.post('/courses', payload);
+
+      const createdOrUpdated = unwrapData<any>(res);
+      const courseId = Number(createdOrUpdated?.id || id);
+      if (!courseId) {
+        throw new Error('Course created but response did not include id.');
+      }
+      navigate(`/tutor/courses/${courseId}/modules`);
     } catch (err) {
       console.error(err);
+      setError((err as any)?.response?.data?.message || 'Unable to save course. Check required fields and try again.');
     } finally {
       setLoading(false);
     }
@@ -49,8 +105,8 @@ export const CreateCourse = () => {
 
       <div className="bg-white dark:bg-slate-800 rounded-3xl border border-slate-200 dark:border-slate-700 shadow-xl overflow-hidden">
         <div className="p-8 border-b border-slate-100 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-900/50">
-          <h1 className="text-2xl font-bold text-slate-900 dark:text-slate-50">Create New Course</h1>
-          <p className="text-slate-500 dark:text-slate-400 mt-1">Fill in the details below to start building your course.</p>
+          <h1 className="text-2xl font-bold text-slate-900 dark:text-slate-50">{id ? 'Edit Course' : 'Create New Course'}</h1>
+          <p className="text-slate-500 dark:text-slate-400 mt-1">Fill in the details below to build and publish your course.</p>
         </div>
 
         <form className="p-8 space-y-8">
@@ -86,13 +142,13 @@ export const CreateCourse = () => {
                   Difficulty Level
                 </label>
                 <select 
-                  value={formData.difficulty}
-                  onChange={e => setFormData({...formData, difficulty: e.target.value})}
+                  value={formData.difficultyLevel}
+                  onChange={e => setFormData({...formData, difficultyLevel: e.target.value})}
                   className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-accent-500 outline-none transition-all dark:text-slate-100"
                 >
-                  <option>Beginner</option>
-                  <option>Intermediate</option>
-                  <option>Advanced</option>
+                  <option value="BEGINNER">Beginner</option>
+                  <option value="INTERMEDIATE">Intermediate</option>
+                  <option value="ADVANCED">Advanced</option>
                 </select>
               </div>
 
@@ -128,6 +184,20 @@ export const CreateCourse = () => {
 
               <div className="space-y-2">
                 <label className="text-sm font-bold text-slate-900 dark:text-slate-50 flex items-center gap-2">
+                  <Rocket size={16} className="text-red-600" />
+                  YouTube Intro Video URL
+                </label>
+                <input
+                  type="text"
+                  value={formData.youtubeVideoUrl}
+                  onChange={e => setFormData({...formData, youtubeVideoUrl: e.target.value})}
+                  placeholder="https://www.youtube.com/watch?v=..."
+                  className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-accent-500 outline-none transition-all dark:text-slate-100"
+                />
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-sm font-bold text-slate-900 dark:text-slate-50 flex items-center gap-2">
                   <DollarSign size={16} className="text-rose-600" />
                   Price (0 for Free)
                 </label>
@@ -141,10 +211,14 @@ export const CreateCourse = () => {
             </div>
           </div>
 
+          {error && (
+            <p className="text-sm text-rose-600 dark:text-rose-400">{error}</p>
+          )}
+
           <div className="flex items-center gap-4 pt-6 border-t border-slate-100 dark:border-slate-700">
             <button 
               type="button"
-              onClick={(e) => handleSubmit(e, 'draft')}
+              onClick={(e) => handleSubmit(e, 'DRAFT')}
               disabled={loading}
               className="flex-1 flex items-center justify-center gap-2 py-4 bg-slate-100 dark:bg-slate-900 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-900 dark:text-slate-100 font-bold rounded-2xl transition-all border border-slate-200 dark:border-slate-700"
             >
@@ -153,7 +227,7 @@ export const CreateCourse = () => {
             </button>
             <button 
               type="button"
-              onClick={(e) => handleSubmit(e, 'published')}
+              onClick={(e) => handleSubmit(e, 'PUBLISHED')}
               disabled={loading}
               className="flex-1 flex items-center justify-center gap-2 py-4 bg-accent-600 hover:bg-accent-700 text-white font-bold rounded-2xl transition-all shadow-lg shadow-accent-200 dark:shadow-none"
             >

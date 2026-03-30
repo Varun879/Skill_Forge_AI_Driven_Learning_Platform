@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { BarChart3, ChevronRight, Clock } from 'lucide-react';
+import { BarChart3, Bot, ChevronRight, Clock, MessageSquare, Send, X } from 'lucide-react';
 import api from '../services/api';
 import {
   Bar,
@@ -40,6 +40,11 @@ type CategoryPerformance = {
   accuracy: number;
   averageSolveTimeSeconds: number;
   expectedSolveTimeSeconds: number;
+};
+
+type AIMessage = {
+  role: 'user' | 'assistant';
+  text: string;
 };
 
 const unwrapData = <T,>(response: any): T => {
@@ -113,6 +118,7 @@ export const Practice = () => {
   const [loading, setLoading] = useState(false);
 
   const [categoryGroups, setCategoryGroups] = useState<MCQCategoryGroup[]>([]);
+  const [categoryLoadError, setCategoryLoadError] = useState<string>('');
   const [performance, setPerformance] = useState<CategoryPerformance[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [sessionQuestions, setSessionQuestions] = useState<any[]>([]);
@@ -124,6 +130,13 @@ export const Practice = () => {
   const [completedQuestionIds, setCompletedQuestionIds] = useState<number[]>([]);
   const [sessionResults, setSessionResults] = useState<SubmissionResult[]>([]);
   const [feedbackMessage, setFeedbackMessage] = useState<string>('');
+  const [aiPanelOpen, setAiPanelOpen] = useState(false);
+  const [aiInput, setAiInput] = useState('');
+  const [aiMessages, setAiMessages] = useState<AIMessage[]>([
+    { role: 'assistant', text: 'Ask me for hints or concept explanations. I will provide guidance, not direct answers.' },
+  ]);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiContextQuestionId, setAiContextQuestionId] = useState<number | null>(null);
 
   const tabs = [
     { id: 'CODING' as const, label: 'Coding Problems' },
@@ -163,6 +176,7 @@ export const Practice = () => {
         return;
       }
       setLoading(true);
+      setCategoryLoadError('');
       try {
         const res = await api.get('/practice/mcq/categories', {
           params: { type: mcqTypeParam },
@@ -172,6 +186,12 @@ export const Practice = () => {
       } catch (err) {
         console.error(err);
         setCategoryGroups([]);
+        const status = (err as any)?.response?.status;
+        if (status === 401 || status === 403) {
+          setCategoryLoadError('Unable to load categories for this account. Please sign in as a learner and try again.');
+        } else {
+          setCategoryLoadError('Unable to load categories right now. Please refresh and try again.');
+        }
       } finally {
         setLoading(false);
       }
@@ -275,25 +295,20 @@ export const Practice = () => {
   };
 
   const loadAdaptiveNextSet = async () => {
-    const used = new Set<number>(completedQuestionIds);
-    const nextQuestions: any[] = [];
-    let guard = 0;
+    if (!selectedCategory) {
+      setFeedbackMessage('Select a category before loading the adaptive next set.');
+      return;
+    }
 
     setLoading(true);
     try {
-      while (nextQuestions.length < 10 && guard < 40) {
-        guard += 1;
-        const res = await api.get('/practice/mcq/next', {
-          params: { type: mcqTypeParam },
-        });
-        const payload = unwrapData<any>(res);
-        const candidate = payload?.question || null;
-        if (!candidate?.id || used.has(candidate.id)) {
-          continue;
-        }
-        used.add(candidate.id);
-        nextQuestions.push(candidate);
-      }
+      const used = new Set<number>(completedQuestionIds);
+      const res = await api.get('/practice/mcq/next-set', {
+        params: { type: mcqTypeParam, category: selectedCategory, size: 10 },
+      });
+      const payload = unwrapData<any>(res);
+      const rawQuestions = Array.isArray(payload?.questions) ? payload.questions : [];
+      const nextQuestions = rawQuestions.filter((question: any) => question?.id && !used.has(question.id));
 
       if (nextQuestions.length === 0) {
         setFeedbackMessage('No additional adaptive questions available yet.');
@@ -305,11 +320,70 @@ export const Practice = () => {
       setSelectedOptionId(null);
       setSubmittedResult(null);
       setSessionResults([]);
-      setFeedbackMessage('Adaptive set loaded based on your attempts and category performance.');
+      const accuracyUsed = typeof payload?.lastTenAccuracy === 'number'
+        ? Math.round(payload.lastTenAccuracy * 100)
+        : null;
+      setFeedbackMessage(
+        accuracyUsed === null
+          ? 'Adaptive next set loaded.'
+          : `Adaptive next set loaded based on your last 10 accuracy (${accuracyUsed}%).`
+      );
       setSessionStartAt(Date.now());
     } catch (err) {
-      console.error(err);
-      setFeedbackMessage('Unable to load adaptive next set right now.');
+      console.error('next-set failed, falling back to next loop', err);
+      try {
+        const used = new Set<number>(completedQuestionIds);
+        const nextQuestions: any[] = [];
+        let guard = 0;
+
+        while (nextQuestions.length < 10 && guard < 80) {
+          guard += 1;
+          const res = await api.get('/practice/mcq/next', {
+            params: { type: mcqTypeParam, category: selectedCategory },
+          });
+          const payload = unwrapData<any>(res);
+          const candidate = payload?.question || null;
+
+          if (!candidate?.id || used.has(candidate.id)) {
+            continue;
+          }
+
+          used.add(candidate.id);
+          nextQuestions.push(candidate);
+        }
+
+        if (nextQuestions.length === 0) {
+          const status = (err as any)?.response?.status;
+          const backendMessage = (err as any)?.response?.data?.message || (err as any)?.response?.data?.error;
+          if (status === 401 || status === 403) {
+            setFeedbackMessage('Session expired or unauthorized. Please login again as learner and retry.');
+          } else if (backendMessage) {
+            setFeedbackMessage(String(backendMessage));
+          } else {
+            setFeedbackMessage('Unable to load adaptive next set right now.');
+          }
+          return;
+        }
+
+        setSessionQuestions(nextQuestions);
+        setCurrentIndex(0);
+        setSelectedOptionId(null);
+        setSubmittedResult(null);
+        setSessionResults([]);
+        setFeedbackMessage('Adaptive next set loaded using fallback mode.');
+        setSessionStartAt(Date.now());
+      } catch (fallbackErr) {
+        console.error('fallback next loop failed', fallbackErr);
+        const status = (fallbackErr as any)?.response?.status;
+        const backendMessage = (fallbackErr as any)?.response?.data?.message || (fallbackErr as any)?.response?.data?.error;
+        if (status === 401 || status === 403) {
+          setFeedbackMessage('Session expired or unauthorized. Please login again as learner and retry.');
+        } else if (backendMessage) {
+          setFeedbackMessage(String(backendMessage));
+        } else {
+          setFeedbackMessage('Unable to load adaptive next set right now.');
+        }
+      }
     } finally {
       setLoading(false);
     }
@@ -324,6 +398,40 @@ export const Practice = () => {
       expectedTime: Math.round(item.expectedSolveTimeSeconds || 0),
     }));
   }, [performance]);
+
+  const askAi = async () => {
+    const message = aiInput.trim();
+    if (!message || aiLoading) {
+      return;
+    }
+
+    setAiMessages((prev) => [...prev, { role: 'user', text: message }]);
+    setAiInput('');
+    setAiLoading(true);
+
+    try {
+      const res = await api.post('/ai/chat', {
+        message,
+        questionId: aiContextQuestionId,
+      });
+      const payload = unwrapData<any>(res);
+      const reply = payload?.reply || 'Try identifying constraints and validating your reasoning with a simple test case.';
+      setAiMessages((prev) => [...prev, { role: 'assistant', text: String(reply) }]);
+    } catch (err) {
+      const fallback = (err as any)?.response?.data?.message || 'Unable to fetch AI hint right now.';
+      setAiMessages((prev) => [...prev, { role: 'assistant', text: String(fallback) }]);
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+  const handleAskDoubtForQuestion = (questionId?: number) => {
+    setAiPanelOpen(true);
+    if (questionId) {
+      setAiContextQuestionId(questionId);
+      setAiInput('Give me a hint for this question.');
+    }
+  };
 
   return (
     <div className="space-y-8 pb-12">
@@ -396,6 +504,20 @@ export const Practice = () => {
                 </button>
               ))}
             </div>
+
+            {loading && (
+              <p className="text-sm text-slate-500">Loading categories...</p>
+            )}
+
+            {!loading && !!categoryLoadError && (
+              <p className="text-sm text-rose-600 dark:text-rose-400">{categoryLoadError}</p>
+            )}
+
+            {!loading && !categoryLoadError && categoryGroups.length === 0 && (
+              <p className="text-sm text-slate-500">
+                No categories are available for this section yet. Please try again in a moment.
+              </p>
+            )}
           </section>
 
           {selectedCategory && currentQuestion && (
@@ -407,6 +529,13 @@ export const Practice = () => {
 
               <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100">{currentQuestion.title}</h3>
               <p className="text-sm text-slate-600 dark:text-slate-300">{currentQuestion.prompt}</p>
+
+              <button
+                onClick={() => handleAskDoubtForQuestion(currentQuestion.id)}
+                className="inline-flex items-center gap-2 px-3 py-2 text-xs font-bold rounded-lg border border-slate-200 dark:border-slate-700 hover:border-accent-400 text-slate-700 dark:text-slate-200"
+              >
+                <MessageSquare size={14} /> Ask Doubt
+              </button>
 
               <div className="space-y-2">
                 {(currentQuestion.options || []).map((option: any) => {
@@ -526,6 +655,70 @@ export const Practice = () => {
             </div>
           </section>
         </>
+      )}
+
+      <button
+        onClick={() => setAiPanelOpen((prev) => !prev)}
+        className="fixed bottom-6 right-6 z-40 w-14 h-14 rounded-full bg-accent-600 hover:bg-accent-700 text-white shadow-xl flex items-center justify-center"
+        aria-label="Toggle AI Chatbot"
+      >
+        {aiPanelOpen ? <X size={20} /> : <Bot size={20} />}
+      </button>
+
+      {aiPanelOpen && (
+        <section className="fixed bottom-24 right-6 z-40 w-[360px] max-w-[calc(100vw-2rem)] bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl shadow-2xl overflow-hidden">
+          <header className="px-4 py-3 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between">
+            <div>
+              <p className="text-xs font-bold uppercase tracking-widest text-accent-600">AI Tutor</p>
+              <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                {aiContextQuestionId ? `Question context: ${aiContextQuestionId}` : 'General context'}
+              </p>
+            </div>
+            <button
+              onClick={() => setAiPanelOpen(false)}
+              className="text-slate-500 hover:text-slate-900 dark:hover:text-slate-100"
+            >
+              <X size={16} />
+            </button>
+          </header>
+
+          <div className="h-72 overflow-y-auto p-4 space-y-3 bg-slate-50/70 dark:bg-slate-900/30">
+            {aiMessages.map((msg, idx) => (
+              <div
+                key={`${msg.role}-${idx}`}
+                className={cn('text-sm p-3 rounded-xl max-w-[90%]', msg.role === 'user'
+                  ? 'ml-auto bg-accent-600 text-white'
+                  : 'bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200')}
+              >
+                {msg.text}
+              </div>
+            ))}
+          </div>
+
+          <div className="p-3 border-t border-slate-200 dark:border-slate-700 space-y-2">
+            <textarea
+              value={aiInput}
+              onChange={(e) => setAiInput(e.target.value)}
+              className="w-full resize-none h-20 rounded-lg border border-slate-200 dark:border-slate-700 px-3 py-2 text-sm bg-white dark:bg-slate-900"
+              placeholder="Ask for a hint or concept explanation..."
+            />
+            <div className="flex items-center justify-between gap-2">
+              <button
+                onClick={() => setAiContextQuestionId(null)}
+                className="text-xs font-bold text-slate-500 hover:text-slate-800"
+              >
+                Clear context
+              </button>
+              <button
+                onClick={askAi}
+                disabled={aiLoading || !aiInput.trim()}
+                className="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-bold bg-accent-600 text-white hover:bg-accent-700 disabled:opacity-60"
+              >
+                <Send size={14} /> {aiLoading ? 'Thinking...' : 'Send'}
+              </button>
+            </div>
+          </div>
+        </section>
       )}
     </div>
   );

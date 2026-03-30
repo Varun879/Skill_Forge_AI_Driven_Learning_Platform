@@ -1,0 +1,141 @@
+spring:
+  application:
+    name: skillforge-backend
+  config:
+    import: "optional:file:.env[.properties],optional:file:skillforge-backend/.env[.properties],optional:file:../skillforge-backend/.env[.properties],optional:file:../skillforge-frontend/.env[.properties]"
+
+  # ── Database ────────────────────────────────────────────────────────────
+  datasource:
+    url:             ${DB_URL:jdbc:postgresql://localhost:5432/skillforge}
+    username:        ${DB_USERNAME:skillforge}
+    password:        ${DB_PASSWORD:skillforge}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size:  10
+      minimum-idle:        2
+      connection-timeout: 30000
+      idle-timeout:       600000
+      max-lifetime:       1800000
+
+  # ── JPA ──────────────────────────────────────────────────────────────────
+  jpa:
+    hibernate:
+      ddl-auto: validate          # schema managed by Flyway — never let Hibernate touch it
+    show-sql:     false
+    properties:
+      hibernate:
+        dialect:        org.hibernate.dialect.PostgreSQLDialect
+        format_sql:     true
+        jdbc:
+          time_zone:    UTC
+
+  # ── Flyway ───────────────────────────────────────────────────────────────
+  flyway:
+    enabled:             true
+    locations:           classpath:db/migration
+    baseline-on-migrate: true
+
+  # ── Mail (OTP delivery) ──────────────────────────────────────────────────
+  mail:
+    host:     ${MAIL_HOST:smtp.gmail.com}
+    port:     ${MAIL_PORT:587}
+    username: ${MAIL_USERNAME:}
+    password: ${MAIL_PASSWORD:}
+    properties:
+      mail:
+        smtp:
+          auth:                true
+          starttls:
+            enable:   true
+            required: true
+          connectiontimeout:   5000
+          timeout:             5000
+          writetimeout:        5000
+
+  security:
+    oauth2:
+      client:
+        registration:
+          google:
+            client-id: ${GOOGLE_CLIENT_ID:GOOGLE_CLIENT_ID_NOT_SET}
+            client-secret: ${GOOGLE_CLIENT_SECRET:GOOGLE_CLIENT_SECRET_NOT_SET}
+            scope:
+              - email
+              - profile
+            redirect-uri: "{baseUrl}/login/oauth2/code/google"
+        provider:
+          google:
+            authorization-uri: https://accounts.google.com/o/oauth2/v2/auth
+            token-uri: https://oauth2.googleapis.com/token
+            user-info-uri: https://www.googleapis.com/oauth2/v3/userinfo
+
+# ── Server ─────────────────────────────────────────────────────────────────
+server:
+  port: ${PORT:8080}
+  error:
+    # Never expose Spring's default error details or stack traces to clients
+    include-message:        never
+    include-stacktrace:     never
+    include-binding-errors: never
+
+# ── Application-specific properties ────────────────────────────────────────
+app:
+  backend:
+    public-base-url: ${BACKEND_PUBLIC_BASE_URL:http://localhost:8080}
+  frontend:
+    oauth-success-url: ${FRONTEND_OAUTH_SUCCESS_URL:http://localhost:3000/oauth-success}
+    oauth-error-url: ${FRONTEND_OAUTH_ERROR_URL:http://localhost:3000/oauth-error}
+  jwt:
+    # SECURITY: Override JWT_SECRET in production with a 256-bit+ Base64-encoded key.
+    # Default value is a dev-only placeholder — never ship this to production.
+    secret:               ${JWT_SECRET:c2tpbGxmb3JnZS1kZXYtc2VjcmV0LWtleS1mb3ItaHMyNTYtbXVzdC1iZS1hdC1sZWFzdC0yNTYtYml0cw==}
+    access-token-expiry:  900000      # 15 minutes (ms)
+    refresh-token-expiry: 604800000   # 7 days     (ms)
+
+  google:
+    client-id: ${GOOGLE_CLIENT_ID:}
+  oauth:
+    enforce-config: ${OAUTH_ENFORCE_CONFIG:false}
+
+  cors:
+    allowed-origins: ${CORS_ORIGINS:http://localhost:3000,http://localhost:5173}
+  mail:
+    sender-name: ${MAIL_SENDER_NAME:SkillForge}
+  otp:
+    validity-minutes: ${OTP_VALIDITY_MINUTES:5}
+
+practice:
+  ai:
+    model-api-key: ${AI_MODEL_API_KEY:${GEMINI_API_KEY:${GOOGLE_API_KEY:${VITE_GEMINI_API_KEY:}}}}
+    model-api-url: ${AI_MODEL_API_URL:https://generativelanguage.googleapis.com/v1beta/openai/chat/completions}
+    model-name: ${AI_MODEL_NAME:gemini-2.0-flash}
+    min-questions-per-category: ${PRACTICE_MIN_QUESTIONS_PER_CATEGORY:10}
+    require-real-questions: ${PRACTICE_REQUIRE_REAL_QUESTIONS:true}
+    max-categories-to-topup-per-request: ${PRACTICE_MAX_CATEGORIES_TOPUP_PER_REQUEST:2}
+
+execution:
+  queue:
+    poll-ms: ${EXECUTION_QUEUE_POLL_MS:250}
+    batch-size: ${EXECUTION_QUEUE_BATCH_SIZE:5}
+    redis-enabled: ${EXECUTION_QUEUE_REDIS_ENABLED:false}
+    key: ${EXECUTION_QUEUE_KEY:skillforge:execution:queue}
+  limits:
+    timeout-ms: ${EXECUTION_TIMEOUT_MS:3000}
+    memory-kb: ${EXECUTION_MEMORY_KB:262144}
+  rate-limit:
+    run-per-minute: ${EXECUTION_RATE_RUN_PER_MINUTE:20}
+    submit-per-minute: ${EXECUTION_RATE_SUBMIT_PER_MINUTE:10}
+  cache:
+    ttl-seconds: ${EXECUTION_CACHE_TTL_SECONDS:300}
+  docker:
+    enabled: ${EXECUTION_DOCKER_ENABLED:false}
+
+# ── Logging ─────────────────────────────────────────────────────────────────
+logging:
+  level:
+    com.skillforge:              INFO
+    org.springframework.security: WARN
+    org.hibernate.SQL:           WARN
+    org.flywaydb:                INFO
+firebase:
+  service-account-path: classpath:firebase-service-account.json

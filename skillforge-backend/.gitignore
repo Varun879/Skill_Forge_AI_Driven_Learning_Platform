@@ -1,0 +1,26 @@
+# Build outputs
+/target/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+**/firebase-service-account.json
+*firebase-adminsdk*.json
+*service-account*.json
+
+# Runtime data and logs
+/data/
+*.log
+backend_*.log
+compile_errors.txt
+apache-maven-*.zip
+
+# IDE/editor
+.vscode/
+.idea/
+*.iml
+
+# OS files
+.DS_Store
+Thumbs.db
